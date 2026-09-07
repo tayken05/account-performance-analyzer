@@ -1,8 +1,22 @@
 -- Account Performance Analyzer — MVP schema for Neon PostgreSQL.
--- Three tables only: models, statistic_collection_runs, statistic_snapshots.
+-- Five tables: account_managers, models, model_manager_assignments,
+-- statistic_collection_runs, statistic_snapshots.
+-- Desired schema for a fresh database. Not a live-database migration.
 -- Stores raw OnlyFans statistics. Does not define derived metrics or reports.
 
+-- Staff who may be responsible for creator accounts. No login or auth fields.
+-- updated_at is initialized by DEFAULT now(); application updates must set it explicitly.
+CREATE TABLE account_managers (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name TEXT NOT NULL,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT account_managers_name_key UNIQUE (name)
+);
+
 -- Creators managed by the team. No OnlyFans passwords or session credentials.
+-- Manager responsibility is stored in model_manager_assignments, not on this table.
 CREATE TABLE models (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   display_name TEXT NOT NULL,
@@ -15,6 +29,36 @@ CREATE TABLE models (
   -- Unique when present; PostgreSQL UNIQUE allows multiple NULLs.
   CONSTRAINT models_adspower_profile_id_key UNIQUE (adspower_profile_id)
 );
+
+-- Who managed a model, and during which period. ended_at NULL means current.
+CREATE TABLE model_manager_assignments (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  model_id UUID NOT NULL REFERENCES models (id) ON DELETE CASCADE,
+  account_manager_id UUID NOT NULL REFERENCES account_managers (id) ON DELETE RESTRICT,
+  started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  ended_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT model_manager_assignments_ended_at_check
+    CHECK (ended_at IS NULL OR ended_at > started_at)
+);
+
+-- Assignment history for a model.
+CREATE INDEX model_manager_assignments_model_id_idx
+  ON model_manager_assignments (model_id);
+
+-- All assignments belonging to a manager.
+CREATE INDEX model_manager_assignments_account_manager_id_idx
+  ON model_manager_assignments (account_manager_id);
+
+-- Only one current assignment per model.
+CREATE UNIQUE INDEX model_manager_assignments_one_current_per_model_idx
+  ON model_manager_assignments (model_id)
+  WHERE ended_at IS NULL;
+
+-- Current models belonging to an account manager.
+CREATE INDEX model_manager_assignments_current_by_manager_idx
+  ON model_manager_assignments (account_manager_id)
+  WHERE ended_at IS NULL;
 
 -- Every automation attempt to collect statistics for a model.
 CREATE TABLE statistic_collection_runs (
